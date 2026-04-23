@@ -4,21 +4,23 @@
 #include "structs.h"
 
 extern int SEEPieceValues[];
+extern uint64_t line[64][64];
 
 static inline int move_estimated_value(position_t *pos, int move) {
 
   // Start with the value of the piece on the target square
-  int target_piece = pos->mailbox[get_move_target(move)] > 5
-                         ? pos->mailbox[get_move_target(move)] - 6
-                         : pos->mailbox[get_move_target(move)];
-  int promoted_piece = get_move_promoted(pos->side, move);
-  promoted_piece = promoted_piece > 5 ? promoted_piece - 6 : promoted_piece;
+  int target_sq = get_move_target(move);
+  int target_piece = pos->mailbox[target_sq];
+  int target_type = target_piece > 5 ? target_piece - 6 : target_piece;
 
-  int value = SEEPieceValues[target_piece];
+  int promoted_piece = get_move_promoted(pos->side, move);
+  int promoted_type = promoted_piece > 5 ? promoted_piece - 6 : promoted_piece;
+
+  int value = SEEPieceValues[target_type];
 
   // Factor in the new piece's value and remove our promoted pawn
   if (is_move_promotion(move))
-    value += SEEPieceValues[promoted_piece] - SEEPieceValues[PAWN];
+    value += SEEPieceValues[promoted_type] - SEEPieceValues[PAWN];
 
   // Target square is encoded as empty for enpass moves
   else if (get_move_enpassant(move))
@@ -97,6 +99,13 @@ int SEE(position_t *pos, int move, int threshold) {
   // so that we do not let the same piece attack twice
   attackers = all_attackers_to_square(pos, occupied, to) & occupied;
 
+  uint64_t allowed = (~pos->blockers[white] | line[get_lsb(pos->bitboards[K])][to]) &
+                     (~pos->blockers[black] | line[get_lsb(pos->bitboards[k])][to]);
+
+  attackers &= allowed;
+  rooks &= allowed;
+  bishops &= allowed;
+
   // Now our opponents turn to recapture
   colour = pos->side ^ 1;
 
@@ -117,9 +126,8 @@ int SEE(position_t *pos, int move, int threshold) {
     }
 
     // Remove this attacker from the occupied
-    occupied ^=
-        (1ull << get_lsb(myAttackers & (pos->bitboards[nextVictim] |
-                                        pos->bitboards[nextVictim + 6])));
+    uint64_t piece_bb = pos->bitboards[nextVictim] | pos->bitboards[nextVictim + 6];
+    occupied ^= (1ull << get_lsb(myAttackers & piece_bb));
 
     // A diagonal move may reveal bishop or queen attackers
     if (nextVictim == PAWN || nextVictim == BISHOP || nextVictim == QUEEN)
@@ -133,7 +141,7 @@ int SEE(position_t *pos, int move, int threshold) {
     attackers &= occupied;
 
     // Swap the turn
-    colour = !colour;
+    colour ^= 1;
 
     // Negamax the balance and add the value of the next victim
     balance = -balance - 1 - SEEPieceValues[nextVictim];
@@ -145,7 +153,7 @@ int SEE(position_t *pos, int move, int threshold) {
       // piece is a king, and our opponent still has attackers, then we've
       // lost as the move we followed would be illegal
       if (nextVictim == KING && (attackers & pos->occupancies[colour]))
-        colour = colour ^ 1;
+        colour ^= 1;
 
       break;
     }
